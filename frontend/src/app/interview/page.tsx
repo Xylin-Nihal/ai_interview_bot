@@ -1,0 +1,265 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { ProtectedRoute } from "@/components/ProtectedRoute";
+import { Navbar } from "@/components/Navbar";
+import { Button } from "@/components/Button";
+import { Input } from "@/components/Input";
+import api from "@/lib/api";
+import { getResumeId } from "@/lib/auth";
+import { getErrorMessage } from "@/lib/errorHandler";
+
+interface Message {
+  id: string;
+  type: "ai" | "user";
+  content: string;
+  timestamp: Date;
+}
+
+export default function InterviewPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const sessionId = Number(searchParams.get("session_id"));
+
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputValue, setInputValue] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [interviewEnded, setInterviewEnded] = useState(false);
+  const [error, setError] = useState("");
+  const [currentQuestion, setCurrentQuestion] = useState<string>("");
+  const [questionCount, setQuestionCount] = useState(0);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const resumeId = getResumeId();
+
+  // Get interview type from backend
+  const [interviewType, setInterviewType] = useState("Technical");
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // Fetch initial question
+  useEffect(() => {
+    if (!sessionId || !resumeId) {
+      router.push("/interview-setup");
+      return;
+    }
+
+    const fetchInitialQuestion = async () => {
+      try {
+        const response = await api.post("/interview/question", null, {
+          params: {
+            session_id: sessionId,
+            interview_type: interviewType,
+            resume_id: resumeId,
+          },
+        });
+
+        if (response.data.message === "Interview completed") {
+          setInterviewEnded(true);
+          setMessages([
+            {
+              id: "end",
+              type: "ai",
+              content: "Interview completed! All 5 questions have been answered. You'll now see your feedback.",
+              timestamp: new Date(),
+            },
+          ]);
+          setTimeout(() => {
+            router.push(`/feedback?session_id=${sessionId}`);
+          }, 3000);
+          return;
+        }
+
+        setCurrentQuestion(response.data.question);
+        setQuestionCount(1);
+        setMessages([
+          {
+            id: "1",
+            type: "ai",
+            content: response.data.question,
+            timestamp: new Date(),
+          },
+        ]);
+      } catch (err: any) {
+        setError(getErrorMessage(err));
+        console.error(err);
+      }
+    };
+
+    fetchInitialQuestion();
+  }, [sessionId, resumeId, router]);
+
+  const handleSubmitAnswer = async () => {
+    if (!inputValue.trim()) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      type: "user",
+      content: inputValue,
+      timestamp: new Date(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputValue("");
+    setLoading(true);
+    setError("");
+
+    try {
+      // Submit answer
+      await api.post("/interview/answer", {
+        session_id: sessionId,
+        question: currentQuestion,
+        answer: inputValue,
+      });
+
+      // Fetch next question
+      const response = await api.post("/interview/question", null, {
+        params: {
+          session_id: sessionId,
+          interview_type: interviewType,
+          resume_id: resumeId,
+        },
+      });
+
+      if (response.data.message === "Interview completed") {
+        setInterviewEnded(true);
+        const endMessage: Message = {
+          id: "end",
+          type: "ai",
+          content: "🎉 Interview completed! All 5 questions answered. Loading your detailed feedback...",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, endMessage]);
+        setTimeout(() => {
+          router.push(`/feedback?session_id=${sessionId}`);
+        }, 3000);
+      } else {
+        setCurrentQuestion(response.data.question);
+        setQuestionCount((prev) => prev + 1);
+        const aiMessage: Message = {
+          id: Date.now().toString(),
+          type: "ai",
+          content: response.data.question,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, aiMessage]);
+      }
+    } catch (err: any) {
+      setError(getErrorMessage(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ProtectedRoute>
+      <div className="min-h-screen bg-light flex flex-col">
+        <Navbar />
+
+        <main className="flex-1 flex flex-col max-w-4xl mx-auto w-full px-6 py-8">
+          {/* Interview Header */}
+          <div className="flex justify-between items-center mb-6">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">Mock Interview</h1>
+              <p className="text-gray-600 mt-1">Question {questionCount} of 5</p>
+            </div>
+            {!interviewEnded && (
+              <div className="text-right">
+                <div className="text-2xl font-bold gradient-text">
+                  {(questionCount / 5 * 100).toFixed(0)}%
+                </div>
+                <p className="text-gray-600 text-sm">Progress</p>
+              </div>
+            )}
+          </div>
+
+          {/* Progress Bar */}
+          {!interviewEnded && (
+            <div className="w-full bg-gray-200 rounded-full h-3 mb-8">
+              <div
+                className="bg-primary h-3 rounded-full transition-all duration-300"
+                style={{ width: `${(questionCount / 5) * 100}%` }}
+              ></div>
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg mb-6">
+              {error}
+            </div>
+          )}
+
+          {/* Messages Container */}
+          <div className="flex-1 bg-white rounded-lg border border-gray-200 p-6 mb-6 overflow-y-auto space-y-4 max-h-96">
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.type === "user" ? "justify-end" : "justify-start"}`}
+              >
+                <div
+                  className={`max-w-xs lg:max-w-md xl:max-w-lg px-4 py-3 rounded-lg ${
+                    msg.type === "user"
+                      ? "bg-primary text-white rounded-br-none"
+                      : "bg-gray-100 text-gray-900 rounded-bl-none"
+                  }`}
+                >
+                  <p className="text-sm lg:text-base">{msg.content}</p>
+                  <p
+                    className={`text-xs mt-1 ${
+                      msg.type === "user" ? "text-blue-100" : "text-gray-500"
+                    }`}
+                  >
+                    {msg.timestamp.toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input Area */}
+          {!interviewEnded && (
+            <div className="space-y-4">
+              <div className="flex gap-3">
+                <Input
+                  value={inputValue}
+                  onChange={(e) => setInputValue(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === "Enter" && !loading) {
+                      handleSubmitAnswer();
+                    }
+                  }}
+                  placeholder="Type your answer here..."
+                  disabled={loading}
+                  className="flex-1"
+                />
+                <Button
+                  onClick={handleSubmitAnswer}
+                  variant="primary"
+                  size="md"
+                  loading={loading}
+                  disabled={!inputValue.trim() || loading}
+                >
+                  Send
+                </Button>
+              </div>
+              <p className="text-xs text-gray-500">
+                Press Enter or click Send to submit your answer
+              </p>
+            </div>
+          )}
+        </main>
+      </div>
+    </ProtectedRoute>
+  );
+}
