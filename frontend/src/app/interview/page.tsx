@@ -31,6 +31,8 @@ export default function InterviewPage() {
   const [currentQuestion, setCurrentQuestion] = useState<string>("");
   const [questionCount, setQuestionCount] = useState(0);
   const [isFollowUpMode, setIsFollowUpMode] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const resumeId = getResumeId();
@@ -183,6 +185,120 @@ export default function InterviewPage() {
     }
   };
 
+  // Web Speech API handlers
+  const startListening = () => {
+    if (typeof window === "undefined") return;
+
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setError("Speech recognition not supported in this browser.");
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "en-US";
+      recognition.interimResults = true;
+      recognition.continuous = true;
+      recognition.maxAlternatives = 1;
+
+      // control flags
+      (recognition as any).keepListening = true;
+      (recognition as any).isRecognizing = false;
+
+      recognition.onstart = () => {
+        (recognition as any).isRecognizing = true;
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event: any) => {
+        // only append final results to avoid duplicates from interim results
+        let finalTranscript = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript + " ";
+          }
+        }
+        finalTranscript = finalTranscript.trim();
+        if (finalTranscript) {
+          setInputValue((prev) => (prev ? prev + " " + finalTranscript : finalTranscript));
+        }
+      };
+
+      recognition.onerror = (ev: any) => {
+        console.error("Speech recognition error", ev);
+        const msg = ev?.error || ev?.message || JSON.stringify(ev) || "Speech recognition error";
+        setError(msg);
+      };
+
+      recognition.onend = () => {
+        (recognition as any).isRecognizing = false;
+        // If keepListening is true, restart recognition so it stays active
+        if ((recognition as any).keepListening) {
+          try {
+            if (!(recognition as any).isRecognizing) recognition.start();
+          } catch (e) {
+            // swallow start errors
+          }
+        } else {
+          setIsListening(false);
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    try {
+      // ensure keepListening is true so onend will restart
+      recognitionRef.current.keepListening = true;
+      recognitionRef.current.start();
+      setIsListening(true);
+      setError("");
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const stopListening = () => {
+    try {
+      // tell recognition not to restart when it ends
+      if (recognitionRef.current) recognitionRef.current.keepListening = false;
+      recognitionRef.current?.stop();
+    } catch (err) {
+      console.error(err);
+    }
+    setIsListening(false);
+  };
+
+  const toggleListening = () => {
+    if (isListening) stopListening();
+    else startListening();
+  };
+
+  // Speak AI messages using Web Speech API (SpeechSynthesis)
+  const speakText = (text: string) => {
+    if (typeof window === "undefined") return;
+    const synth = (window as any).speechSynthesis;
+    if (!synth) return;
+    try {
+      synth.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "en-US";
+      utter.rate = 1.0;
+      synth.speak(utter);
+    } catch (err) {
+      console.error("SpeechSynthesis error", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!messages || messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last && last.type === "ai") {
+      speakText(last.content);
+    }
+  }, [messages]);
+
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-light flex flex-col">
@@ -268,19 +384,32 @@ export default function InterviewPage() {
                   disabled={loading}
                   className="flex-1"
                 />
-                <Button
-                  onClick={handleSubmitAnswer}
-                  variant="primary"
-                  size="md"
-                  loading={loading}
-                  disabled={!inputValue.trim() || loading}
-                >
-                  Send
-                </Button>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={toggleListening}
+                      variant={isListening ? "primary" : "outline"}
+                      size="md"
+                      className={isListening ? "bg-red-500 border-red-500 text-white" : ""}
+                      aria-label={isListening ? "Stop recording" : "Start recording"}
+                    >
+                      {isListening ? "🎤 Listening" : "🎤"}
+                    </Button>
+
+                    <Button
+                      onClick={handleSubmitAnswer}
+                      variant="primary"
+                      size="md"
+                      loading={loading}
+                      disabled={!inputValue.trim() || loading}
+                    >
+                      Send
+                    </Button>
+                  </div>
               </div>
-              <p className="text-xs text-gray-500">
-                Press Enter or click Send to submit your answer
-              </p>
+                <p className="text-xs text-gray-500">
+                  Press Enter or click Send to submit your answer
+                  {isListening && <span className="ml-3 text-sm text-red-600">Listening...</span>}
+                </p>
             </div>
           )}
         </main>
