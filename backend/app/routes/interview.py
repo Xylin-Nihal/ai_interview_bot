@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.utils.groq_client import generate_with_groq
 from app.models.interview_turn import InterviewTurn
+from app.models.interview_session import InterviewSession
 from app.schemas.interview_answer import InterviewAnswerSubmit
 
 from app.database import get_db
 from app.core.security import get_current_user
 from app.utils.vector_search import search_resume_chunks
-from app.utils.prompt_builder import build_interview_prompt
+from app.utils.prompt_builder import build_interview_prompt, build_followup_prompt
 
 router = APIRouter(
     prefix="/interview",
@@ -96,7 +97,7 @@ def submit_answer(
         .filter(
             InterviewTurn.session_id == answer_data.session_id,
             InterviewTurn.is_follow_up == True,
-            InterviewTurn.created_at > last_main_question.created_at
+            InterviewTurn.parent_turn_id == last_main_question.id
         )
         .first()
     )
@@ -104,26 +105,28 @@ def submit_answer(
     if follow_up_exists:
         return {"message": "Follow-up already asked"}
 
-    # Generate ONE follow-up
-    followup_prompt = f"""
-You are a professional interviewer.
+    # Get interview type from session
+    session = db.query(InterviewSession).filter(
+        InterviewSession.id == answer_data.session_id
+    ).first()
+    
+    if not session:
+        return {"error": "Session not found"}
 
-Main question:
-{last_main_question.question}
-
-Candidate answer:
-{answer_data.answer}
-
-Ask ONLY ONE follow-up question.
-Do NOT ask another main question.
-"""
+    # Generate ONE follow-up with context
+    followup_prompt = build_followup_prompt(
+        interview_type=session.interview_type,
+        main_question=last_main_question.question,
+        candidate_answer=answer_data.answer
+    )
 
     followup_question = generate_with_groq(followup_prompt)
 
     followup_turn = InterviewTurn(
         session_id=answer_data.session_id,
         question=followup_question,
-        is_follow_up=True
+        is_follow_up=True,
+        parent_turn_id=last_main_question.id
     )
 
     db.add(followup_turn)

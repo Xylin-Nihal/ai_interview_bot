@@ -58,8 +58,11 @@ export default function InterviewSetupPage() {
         interview_type: selectedType,
       });
 
+      // Store interview type in session storage
+      sessionStorage.setItem("interviewType", selectedType);
+      
       setSessionId(response.data.session_id);
-      router.push(`/interview?session_id=${response.data.session_id}`);
+      router.push(`/interview?session_id=${response.data.session_id}&interview_type=${selectedType}`);
     } catch (err: any) {
       setError(getErrorMessage(err));
     } finally {

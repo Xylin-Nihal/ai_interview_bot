@@ -21,6 +21,7 @@ export default function InterviewPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const sessionId = Number(searchParams.get("session_id"));
+  const interviewTypeParam = searchParams.get("interview_type") || sessionStorage.getItem("interviewType") || "";
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -29,12 +30,13 @@ export default function InterviewPage() {
   const [error, setError] = useState("");
   const [currentQuestion, setCurrentQuestion] = useState<string>("");
   const [questionCount, setQuestionCount] = useState(0);
+  const [isFollowUpMode, setIsFollowUpMode] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const resumeId = getResumeId();
 
-  // Get interview type from backend
-  const [interviewType, setInterviewType] = useState("Technical");
+  // Get interview type from query params or session storage
+  const [interviewType, setInterviewType] = useState<string>(interviewTypeParam);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,8 +48,16 @@ export default function InterviewPage() {
 
   // Fetch initial question
   useEffect(() => {
-    if (!sessionId || !resumeId) {
-      router.push("/interview-setup");
+    if (!sessionId || !resumeId || !interviewType) {
+      if (!interviewType) {
+        // Try to get interview type from session storage or redirect
+        const storedType = sessionStorage.getItem("interviewType");
+        if (storedType) {
+          setInterviewType(storedType);
+        } else {
+          router.push("/interview-setup");
+        }
+      }
       return;
     }
 
@@ -79,6 +89,7 @@ export default function InterviewPage() {
 
         setCurrentQuestion(response.data.question);
         setQuestionCount(1);
+        setIsFollowUpMode(false);
         setMessages([
           {
             id: "1",
@@ -94,7 +105,7 @@ export default function InterviewPage() {
     };
 
     fetchInitialQuestion();
-  }, [sessionId, resumeId, router]);
+  }, [sessionId, resumeId, interviewType, router]);
 
   const handleSubmitAnswer = async () => {
     if (!inputValue.trim()) return;
@@ -113,43 +124,57 @@ export default function InterviewPage() {
 
     try {
       // Submit answer
-      await api.post("/interview/answer", {
+      const answerResponse = await api.post("/interview/answer", {
         session_id: sessionId,
         question: currentQuestion,
         answer: inputValue,
       });
 
-      // Fetch next question
-      const response = await api.post("/interview/question", null, {
-        params: {
-          session_id: sessionId,
-          interview_type: interviewType,
-          resume_id: resumeId,
-        },
-      });
-
-      if (response.data.message === "Interview completed") {
-        setInterviewEnded(true);
-        const endMessage: Message = {
-          id: "end",
-          type: "ai",
-          content: "🎉 Interview completed! All 5 questions answered. Loading your detailed feedback...",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, endMessage]);
-        setTimeout(() => {
-          router.push(`/feedback?session_id=${sessionId}`);
-        }, 3000);
-      } else {
-        setCurrentQuestion(response.data.question);
-        setQuestionCount((prev) => prev + 1);
-        const aiMessage: Message = {
+      // Check if there's a follow-up question
+      if (answerResponse.data.follow_up_question) {
+        setIsFollowUpMode(true);
+        setCurrentQuestion(answerResponse.data.follow_up_question);
+        const followUpMessage: Message = {
           id: Date.now().toString(),
           type: "ai",
-          content: response.data.question,
+          content: answerResponse.data.follow_up_question,
           timestamp: new Date(),
         };
-        setMessages((prev) => [...prev, aiMessage]);
+        setMessages((prev) => [...prev, followUpMessage]);
+      } else {
+        // Move to next main question
+        setIsFollowUpMode(false);
+        const response = await api.post("/interview/question", null, {
+          params: {
+            session_id: sessionId,
+            interview_type: interviewType,
+            resume_id: resumeId,
+          },
+        });
+
+        if (response.data.message === "Interview completed") {
+          setInterviewEnded(true);
+          const endMessage: Message = {
+            id: "end",
+            type: "ai",
+            content: "🎉 Interview completed! All 5 questions answered. Loading your detailed feedback...",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, endMessage]);
+          setTimeout(() => {
+            router.push(`/feedback?session_id=${sessionId}`);
+          }, 3000);
+        } else {
+          setCurrentQuestion(response.data.question);
+          setQuestionCount((prev) => prev + 1);
+          const aiMessage: Message = {
+            id: Date.now().toString(),
+            type: "ai",
+            content: response.data.question,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, aiMessage]);
+        }
       }
     } catch (err: any) {
       setError(getErrorMessage(err));

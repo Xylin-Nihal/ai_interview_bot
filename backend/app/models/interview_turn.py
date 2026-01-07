@@ -7,6 +7,7 @@ class InterviewTurn(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     session_id = Column(Integer, ForeignKey("interview_sessions.id"), nullable=False)
+    parent_turn_id = Column(Integer, ForeignKey("interview_turns.id"), nullable=True)
 
     question = Column(Text, nullable=False)
     answer = Column(Text, nullable=True)
